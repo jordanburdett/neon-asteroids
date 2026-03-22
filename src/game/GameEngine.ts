@@ -1,6 +1,7 @@
 import {
   GameStatus,
   AsteroidSize,
+  PhaseShiftStatus,
   ASTEROID_RADIUS,
   ASTEROID_SCORE,
   type GameState,
@@ -18,6 +19,13 @@ import {
   randomSign,
   length,
 } from '../utils/math'
+import { mulberry32 } from '../utils/prng'
+import {
+  type DailyWaveData,
+  generateDailyWave,
+  saveDailyRecord,
+  getDayNumber,
+} from './DailyChallenge'
 
 const CANVAS_WIDTH = 800
 const CANVAS_HEIGHT = 600
@@ -44,6 +52,11 @@ const UFO_REENTRY_MIN = 3            // seconds
 const UFO_REENTRY_MAX = 8            // seconds
 const UFO_SCORE = 1000
 
+// Phase shift constants
+const PHASE_SHIFT_DURATION = 1.5    // seconds of phasing
+const PHASE_SHIFT_COOLDOWN = 10     // seconds of cooldown
+const PHASE_SAFE_DIST = 120         // min px from all asteroids after teleport
+
 let _asteroidIdCounter = 0
 
 function nextAsteroidId(): number {
@@ -56,6 +69,19 @@ function buildAsteroidVertices(radius: number): Vec2[] {
   for (let i = 0; i < count; i++) {
     const angle = (i / count) * Math.PI * 2
     const jitter = randomBetween(-0.2, 0.2) * radius
+    const r = radius + jitter
+    verts.push({ x: Math.cos(angle) * r, y: Math.sin(angle) * r })
+  }
+  return verts
+}
+
+export function buildAsteroidVerticesFromSeed(radius: number, seed: number): Vec2[] {
+  const rand = mulberry32(seed)
+  const count = 8 + Math.floor(rand() * 5)  // 8-12 vertices
+  const verts: Vec2[] = []
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2
+    const jitter = (rand() * 0.4 - 0.2) * radius
     const r = radius + jitter
     verts.push({ x: Math.cos(angle) * r, y: Math.sin(angle) * r })
   }
@@ -154,6 +180,7 @@ function createInitialShip(): GameState['ship'] {
     dyingTimer: 0,
     respawnTimer: 0,
     blinkOn: true,
+    phasing: false,
   }
 }
 
@@ -178,6 +205,12 @@ function createInitialState(): GameState {
     waveTimer: 0,
     events: [],
     asteroidIdCounter: _asteroidIdCounter,
+    phaseShiftStatus: PhaseShiftStatus.READY,
+    phaseShiftTimer: 0,
+    cooldownRemaining: 0,
+    isDaily: false,
+    dailyWaveEmojis: [],
+    livesAtWaveStart: INITIAL_LIVES,
   }
 }
 
@@ -195,6 +228,14 @@ function saveHighScore(score: number): void {
   } catch {
     // ignore
   }
+}
+
+/** Compute wave emoji based on lives lost this wave */
+function waveEmoji(livesAtStart: number, livesNow: number): string {
+  const lost = livesAtStart - livesNow
+  if (lost === 0) return '🌑'
+  if (lost === 1) return '🌓'
+  return '🌗'
 }
 
 export class GameEngine {
@@ -257,10 +298,53 @@ export class GameEngine {
     }
   }
 
+  activatePhaseShift(): void {
+    const { state } = this
+    if (state.phaseShiftStatus !== PhaseShiftStatus.READY) return
+    if (state.status !== GameStatus.PLAYING) return
+    if (state.ship.dying || state.ship.respawning) return
+
+    state.phaseShiftStatus = PhaseShiftStatus.PHASING
+    state.phaseShiftTimer = PHASE_SHIFT_DURATION
+    state.ship.phasing = true
+    state.events.push({ type: 'PHASE_SHIFT_ACTIVATE' })
+  }
+
   drainEvents(): GameEvent[] {
     const events = this.state.events.slice()
     this.state.events = []
     return events
+  }
+
+  /**
+   * Load the first wave of a daily challenge.
+   * Sets up the engine in daily mode with seeded asteroid positions.
+   */
+  loadDailyWave(data: DailyWaveData, livesAtStart: number): void {
+    const { state } = this
+    const radius = ASTEROID_RADIUS[AsteroidSize.LARGE]
+    const asteroids: Asteroid[] = data.asteroids.map((spec, i) => ({
+      id: nextAsteroidId(),
+      pos: { x: spec.x, y: spec.y },
+      vel: { x: spec.vx, y: spec.vy },
+      size: AsteroidSize.LARGE,
+      radius,
+      angle: 0,
+      angularVel: spec.angularVel,
+      vertices: buildAsteroidVerticesFromSeed(radius, spec.vertexSeed + i),
+    }))
+
+    this.state = {
+      ...createInitialState(),
+      asteroids,
+      lives: livesAtStart,
+      livesAtWaveStart: livesAtStart,
+      isDaily: true,
+      dailyWaveEmojis: state.dailyWaveEmojis,
+      wave: state.wave,
+      score: state.score,
+      highScore: loadHighScore(),
+    }
   }
 
   tick(deltaMs: number): void {
@@ -294,6 +378,18 @@ export class GameEngine {
             state.highScore = state.score
             saveHighScore(state.score)
           }
+          // Daily mode: save game-over record
+          if (state.isDaily) {
+            const emojis = [...state.dailyWaveEmojis, '💥']
+            saveDailyRecord({
+              completed: true,
+              waveEmojis: emojis,
+              score: state.score,
+              dayNumber: getDayNumber(),
+              wavesCleared: state.wave - 1,
+            })
+            state.dailyWaveEmojis = emojis
+          }
           return
         }
         // Begin respawn
@@ -320,7 +416,50 @@ export class GameEngine {
       }
     }
 
+    // Tick phase shift state
+    this.tickPhaseShift(dt)
+
     this.tickPlaying(dt)
+  }
+
+  private tickPhaseShift(dt: number): void {
+    const { state } = this
+
+    if (state.phaseShiftStatus === PhaseShiftStatus.PHASING) {
+      state.phaseShiftTimer -= dt
+      if (state.phaseShiftTimer <= 0) {
+        // Resolve phase: find safe position
+        const safePos = this.findSafePosition()
+        state.ship.pos = safePos
+        state.ship.phasing = false
+        state.phaseShiftStatus = PhaseShiftStatus.COOLDOWN
+        state.phaseShiftTimer = PHASE_SHIFT_COOLDOWN
+        state.cooldownRemaining = PHASE_SHIFT_COOLDOWN
+      }
+    } else if (state.phaseShiftStatus === PhaseShiftStatus.COOLDOWN) {
+      state.phaseShiftTimer -= dt
+      state.cooldownRemaining -= dt
+      if (state.phaseShiftTimer <= 0) {
+        state.phaseShiftStatus = PhaseShiftStatus.READY
+        state.phaseShiftTimer = 0
+        state.cooldownRemaining = 0
+      }
+    }
+  }
+
+  private findSafePosition(): Vec2 {
+    const { state } = this
+    // Try up to 20 random positions
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const pos: Vec2 = {
+        x: randomBetween(50, CANVAS_WIDTH - 50),
+        y: randomBetween(50, CANVAS_HEIGHT - 50),
+      }
+      const safe = state.asteroids.every(ast => dist(pos, ast.pos) >= PHASE_SAFE_DIST)
+      if (safe) return pos
+    }
+    // Fallback: canvas center
+    return { x: 400, y: 300 }
   }
 
   private tickPlaying(dt: number): void {
@@ -375,11 +514,12 @@ export class GameEngine {
     // Bullet vs asteroid collision
     this.checkBulletAsteroidCollisions()
 
-    // Ship vs asteroid collision (only when not invulnerable / dying)
+    // Ship vs asteroid collision (only when not invulnerable / dying / phasing)
     if (
       state.status === GameStatus.PLAYING &&
       !state.ship.dying &&
       !state.ship.respawning &&
+      !state.ship.phasing &&
       state.ship.invulnerableTimer <= 0
     ) {
       this.checkShipAsteroidCollisions()
@@ -394,6 +534,12 @@ export class GameEngine {
       state.asteroids.length === 0 &&
       state.ufo === null
     ) {
+      // Daily mode: record wave emoji before transitioning
+      if (state.isDaily) {
+        const emoji = waveEmoji(state.livesAtWaveStart, state.lives)
+        state.dailyWaveEmojis = [...state.dailyWaveEmojis, emoji]
+      }
+
       state.status = GameStatus.WAVE_CLEAR
       state.waveTimer = WAVE_CLEAR_PAUSE
       state.events.push({ type: 'WAVE_CLEAR' })
@@ -587,12 +733,37 @@ export class GameEngine {
   private startNextWave(): void {
     const { state } = this
     state.wave += 1
-    const asteroidCount = Math.min(WAVE_1_ASTEROIDS + (state.wave - 1), MAX_WAVE_ASTEROIDS)
-    const asteroids: Asteroid[] = []
-    for (let i = 0; i < asteroidCount; i++) {
-      asteroids.push(spawnAsteroidAtRandom(AsteroidSize.LARGE, state.ship.pos))
+
+    if (state.isDaily) {
+      // Daily mode: load next wave from seeded data
+      const dailyWaveData = generateDailyWave(
+        // reconstruct dailySeed from context — we use getDailySeed
+        new Date().getFullYear() * 10000 + (new Date().getMonth() + 1) * 100 + new Date().getDate(),
+        state.wave - 1
+      )
+      const radius = ASTEROID_RADIUS[AsteroidSize.LARGE]
+      const asteroids: Asteroid[] = dailyWaveData.asteroids.map((spec, i) => ({
+        id: nextAsteroidId(),
+        pos: { x: spec.x, y: spec.y },
+        vel: { x: spec.vx, y: spec.vy },
+        size: AsteroidSize.LARGE,
+        radius,
+        angle: 0,
+        angularVel: spec.angularVel,
+        vertices: buildAsteroidVerticesFromSeed(radius, spec.vertexSeed + i),
+      }))
+      state.asteroids = asteroids
+      state.livesAtWaveStart = state.lives
+    } else {
+      // Classic mode: random asteroids
+      const asteroidCount = Math.min(WAVE_1_ASTEROIDS + (state.wave - 1), MAX_WAVE_ASTEROIDS)
+      const asteroids: Asteroid[] = []
+      for (let i = 0; i < asteroidCount; i++) {
+        asteroids.push(spawnAsteroidAtRandom(AsteroidSize.LARGE, state.ship.pos))
+      }
+      state.asteroids = asteroids
     }
-    state.asteroids = asteroids
+
     state.ufo = null
     state.status = GameStatus.PLAYING
   }
