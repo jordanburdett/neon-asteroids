@@ -48,6 +48,7 @@ describe('GameEngine', () => {
         dyingTimer: 0,
         respawnTimer: 0,
         blinkOn: true,
+        phasing: false,
       },
     })
   })
@@ -78,6 +79,7 @@ describe('GameEngine', () => {
         dyingTimer: 0,
         respawnTimer: 0,
         blinkOn: true,
+        phasing: false,
       },
     })
     engine.tick(100)
@@ -100,6 +102,7 @@ describe('GameEngine', () => {
         dyingTimer: 0,
         respawnTimer: 0,
         blinkOn: true,
+        phasing: false,
       },
     })
     engine.tick(1)  // 1ms — tiny tick just to trigger position update
