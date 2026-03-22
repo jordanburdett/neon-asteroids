@@ -49,6 +49,8 @@ export const GameEventType = {
   UFO_HIT: 'UFO_HIT',
   GAME_OVER: 'GAME_OVER',
   PHASE_SHIFT_ACTIVATE: 'PHASE_SHIFT_ACTIVATE',
+  THRUST_START: 'THRUST_START',
+  THRUST_STOP: 'THRUST_STOP',
 } as const
 export type GameEventType = typeof GameEventType[keyof typeof GameEventType]
 
@@ -62,6 +64,47 @@ export type GameEvent =
   | { type: 'UFO_HIT' }
   | { type: 'GAME_OVER' }
   | { type: 'PHASE_SHIFT_ACTIVATE' }
+  | { type: 'THRUST_START' }
+  | { type: 'THRUST_STOP' }
+
+// Particle types
+export const ParticleType = {
+  ASTEROID_RING: 'ASTEROID_RING',
+  SHIP_DEATH_LINE: 'SHIP_DEATH_LINE',
+  PHASE_RING: 'PHASE_RING',
+} as const
+export type ParticleType = typeof ParticleType[keyof typeof ParticleType]
+
+export type Particle =
+  | {
+      type: 'ASTEROID_RING'
+      x: number
+      y: number
+      maxRadius: number
+      elapsed: number
+      duration: number
+    }
+  | {
+      type: 'SHIP_DEATH_LINE'
+      x: number
+      y: number
+      vx: number
+      vy: number
+      angle: number
+      angularVel: number
+      length: number
+      opacity: number
+      maxLife: number
+      life: number
+    }
+  | {
+      type: 'PHASE_RING'
+      x: number
+      y: number
+      maxRadius: number
+      elapsed: number
+      duration: number
+    }
 
 export interface Vec2 {
   x: number
@@ -134,4 +177,6 @@ export interface GameState {
   isDaily: boolean
   dailyWaveEmojis: string[]
   livesAtWaveStart: number  // lives count at start of current daily wave
+  // Particles
+  particles: Particle[]
 }
