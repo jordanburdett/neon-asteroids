@@ -1,4 +1,4 @@
-import { GameStatus, type GameState, type StarfieldStar } from './types'
+import { GameStatus, PhaseShiftStatus, type GameState, type StarfieldStar } from './types'
 import { add, scale, rotate } from '../utils/math'
 import { GAME_WIDTH, GAME_HEIGHT, shipFacingVector } from './GameEngine'
 
@@ -8,6 +8,7 @@ const PHOSPHOR_GLOW = 'rgba(255,255,255,0.28)'
 const PHOSPHOR_WIDTH = 1.5
 const PHOSPHOR_GLOW_WIDTH = 5
 const FONT = '14px "Courier New", Courier, monospace'
+const PHASE_COOLDOWN_TOTAL = 10  // must match GameEngine constant
 
 export function generateStarfield(): StarfieldStar[] {
   const stars: StarfieldStar[] = []
@@ -127,6 +128,21 @@ export function render(
       c.lineTo(rightFin.x, rightFin.y)
     })
 
+    // Phase shimmer ghost: third pass at offset with cyan tint when phasing
+    if (ship.phasing) {
+      const offsetX = 2
+      ctx.strokeStyle = 'rgba(0,229,255,0.4)'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.moveTo(nose.x + offsetX, nose.y)
+      ctx.lineTo(leftFin.x + offsetX, leftFin.y)
+      ctx.moveTo(nose.x + offsetX, nose.y)
+      ctx.lineTo(rightFin.x + offsetX, rightFin.y)
+      ctx.moveTo(leftFin.x + offsetX, leftFin.y)
+      ctx.lineTo(rightFin.x + offsetX, rightFin.y)
+      ctx.stroke()
+    }
+
     // Exhaust flame when thrusting
     if (ship.thrusting && Math.random() > 0.5) {
       const backDir = scale(facing, -1)
@@ -181,7 +197,9 @@ export function render(
     ctx.fillText('GAME OVER', W / 2, H / 2 - 20)
     ctx.font = FONT
     ctx.fillText(`SCORE: ${state.score}`, W / 2, H / 2 + 16)
-    ctx.fillText('PRESS SPACE TO RESTART', W / 2, H / 2 + 40)
+    if (!state.isDaily) {
+      ctx.fillText('PRESS SPACE TO RESTART', W / 2, H / 2 + 40)
+    }
     ctx.textAlign = 'left'
   }
 
@@ -203,7 +221,11 @@ function renderHud(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.fillText(`HI ${state.highScore}`, W / 2, 22)
 
   // Wave top-center
-  ctx.fillText(`WAVE ${state.wave}`, W / 2, 40)
+  if (state.isDaily) {
+    ctx.fillText(`DAILY WAVE ${state.wave}`, W / 2, 40)
+  } else {
+    ctx.fillText(`WAVE ${state.wave}`, W / 2, 40)
+  }
 
   // Lives as triangle icons top-right
   ctx.textAlign = 'right'
@@ -212,7 +234,72 @@ function renderHud(ctx: CanvasRenderingContext2D, state: GameState): void {
     drawLifeIcon(ctx, livesX - i * 22, 16)
   }
 
+  // Phase shift HUD icon (bottom-left area)
+  drawPhaseShiftHud(ctx, state)
+
   ctx.textAlign = 'left'
+}
+
+function drawPhaseShiftHud(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const cx = 30
+  const cy = GAME_HEIGHT - 30
+  const r = 12
+
+  ctx.save()
+
+  if (state.phaseShiftStatus === PhaseShiftStatus.READY) {
+    // Full circle, cyan
+    ctx.strokeStyle = 'rgba(0,229,255,0.9)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.stroke()
+    // "H" label
+    ctx.fillStyle = 'rgba(0,229,255,0.9)'
+    ctx.font = '10px "Courier New", Courier, monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('H', cx, cy + 4)
+  } else if (state.phaseShiftStatus === PhaseShiftStatus.PHASING) {
+    // Pulsing cyan full circle
+    ctx.strokeStyle = 'rgba(0,229,255,1.0)'
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(0,229,255,0.3)'
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.fill()
+  } else {
+    // COOLDOWN: depleting arc
+    const fraction = state.cooldownRemaining / PHASE_COOLDOWN_TOTAL
+    const startAngle = -Math.PI / 2  // top
+    const endAngle = startAngle + fraction * Math.PI * 2
+
+    // Background dim circle
+    ctx.strokeStyle = 'rgba(0,229,255,0.2)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.stroke()
+
+    // Foreground depleting arc
+    if (fraction > 0) {
+      ctx.strokeStyle = 'rgba(0,229,255,0.6)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, startAngle, endAngle)
+      ctx.stroke()
+    }
+
+    // "H" label dim
+    ctx.fillStyle = 'rgba(0,229,255,0.4)'
+    ctx.font = '10px "Courier New", Courier, monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('H', cx, cy + 4)
+  }
+
+  ctx.restore()
 }
 
 function drawLifeIcon(ctx: CanvasRenderingContext2D, x: number, y: number): void {
