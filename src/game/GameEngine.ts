@@ -9,6 +9,7 @@ import {
   type Asteroid,
   type Ufo,
   type Vec2,
+  type Particle,
 } from './types'
 import {
   dist,
@@ -125,9 +126,20 @@ function spawnAsteroidAtRandom(size: AsteroidSize, shipPos: Vec2): Asteroid {
 
 function splitAsteroid(
   parent: Asteroid,
-  events: GameEvent[]
+  events: GameEvent[],
+  particles: Particle[]
 ): Asteroid[] {
   events.push({ type: 'ASTEROID_HIT', size: parent.size })
+
+  // Spawn an expanding ring particle at the asteroid's center
+  particles.push({
+    type: 'ASTEROID_RING',
+    x: parent.pos.x,
+    y: parent.pos.y,
+    maxRadius: parent.radius * 2,
+    elapsed: 0,
+    duration: 300,
+  })
 
   if (parent.size === AsteroidSize.SMALL) {
     return []
@@ -211,6 +223,7 @@ function createInitialState(): GameState {
     isDaily: false,
     dailyWaveEmojis: [],
     livesAtWaveStart: INITIAL_LIVES,
+    particles: [],
   }
 }
 
@@ -262,8 +275,14 @@ export class GameEngine {
   }
 
   thrust(down: boolean): void {
+    const wasThrusting = this.thrustDown
     this.thrustDown = down
     this.state.ship.thrusting = down
+    if (!wasThrusting && down) {
+      this.state.events.push({ type: 'THRUST_START' })
+    } else if (wasThrusting && !down) {
+      this.state.events.push({ type: 'THRUST_STOP' })
+    }
   }
 
   fire(): void {
@@ -420,6 +439,9 @@ export class GameEngine {
     this.tickPhaseShift(dt)
 
     this.tickPlaying(dt)
+
+    // Tick particles (advance all statuses, including non-PLAYING states)
+    this.tickParticles(deltaMs)
   }
 
   private tickPhaseShift(dt: number): void {
@@ -435,6 +457,16 @@ export class GameEngine {
         state.phaseShiftStatus = PhaseShiftStatus.COOLDOWN
         state.phaseShiftTimer = PHASE_SHIFT_COOLDOWN
         state.cooldownRemaining = PHASE_SHIFT_COOLDOWN
+
+        // Spawn phase ring at new position
+        state.particles.push({
+          type: 'PHASE_RING',
+          x: safePos.x,
+          y: safePos.y,
+          maxRadius: 200,
+          elapsed: 0,
+          duration: 600,
+        })
       }
     } else if (state.phaseShiftStatus === PhaseShiftStatus.COOLDOWN) {
       state.phaseShiftTimer -= dt
@@ -445,6 +477,25 @@ export class GameEngine {
         state.cooldownRemaining = 0
       }
     }
+  }
+
+  private tickParticles(deltaMs: number): void {
+    const { state } = this
+    state.particles = state.particles.filter(p => {
+      if (p.type === 'ASTEROID_RING' || p.type === 'PHASE_RING') {
+        p.elapsed += deltaMs
+        return p.elapsed < p.duration
+      } else if (p.type === 'SHIP_DEATH_LINE') {
+        const dt = deltaMs / 1000
+        p.x += p.vx * dt
+        p.y += p.vy * dt
+        p.angle += p.angularVel * dt
+        p.life -= deltaMs
+        p.opacity = Math.max(0, p.life / p.maxLife)
+        return p.life > 0
+      }
+      return false
+    })
   }
 
   private findSafePosition(): Vec2 {
@@ -664,7 +715,7 @@ export class GameEngine {
           }
 
           // Split
-          const fragments = splitAsteroid(ast, state.events)
+          const fragments = splitAsteroid(ast, state.events, state.particles)
           newAsteroids.push(...fragments)
           break
         }
@@ -728,6 +779,29 @@ export class GameEngine {
     state.status = GameStatus.SHIP_DYING
     state.events.push({ type: 'SHIP_DIE' })
     this.thrustDown = false
+
+    // Spawn 6 line-segment death particles
+    const { x, y } = state.ship.pos
+    for (let i = 0; i < 6; i++) {
+      const baseAngle = (i / 6) * Math.PI * 2
+      const jitter = (Math.random() - 0.5) * (40 * Math.PI / 180)  // ±20°
+      const angle = baseAngle + jitter
+      const speed = randomBetween(60, 120)
+      const angularVel = randomBetween(2, 4) * randomSign()
+      state.particles.push({
+        type: 'SHIP_DEATH_LINE',
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        angle,
+        angularVel,
+        length: 18,
+        opacity: 1.0,
+        maxLife: 1200,
+        life: 1200,
+      })
+    }
   }
 
   private startNextWave(): void {
