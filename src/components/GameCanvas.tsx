@@ -2,12 +2,19 @@ import { useEffect, useRef } from 'react'
 import { GameEngine } from '../game/GameEngine'
 import { render, generateStarfield } from '../game/renderer'
 import { GameStatus, type StarfieldStar } from '../game/types'
+import type { DailyWaveData } from '../game/DailyChallenge'
 
-export default function GameCanvas() {
+interface GameCanvasProps {
+  dailyWave?: DailyWaveData
+  onGameOver?: (score: number, wave: number, waveEmojis: string[]) => void
+}
+
+export default function GameCanvas({ dailyWave, onGameOver }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<GameEngine | null>(null)
   const starsRef = useRef<StarfieldStar[]>([])
   const rafRef = useRef<number>(0)
+  const gameOverFiredRef = useRef(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -30,6 +37,13 @@ export default function GameCanvas() {
     }
     const engine = engineRef.current
 
+    // Load daily wave if provided
+    if (dailyWave !== undefined) {
+      engine.loadDailyWave(dailyWave, 3)
+    }
+
+    gameOverFiredRef.current = false
+
     if (starsRef.current.length === 0) {
       starsRef.current = generateStarfield()
     }
@@ -44,6 +58,16 @@ export default function GameCanvas() {
       engine.tick(Math.min(delta, 100))  // cap at 100ms to avoid spiral of death
       const state = engine.getState()
       render(ctx, state, starsRef.current, dpr)
+
+      // Notify parent when daily game over
+      if (
+        state.status === GameStatus.GAME_OVER &&
+        !gameOverFiredRef.current &&
+        onGameOver !== undefined
+      ) {
+        gameOverFiredRef.current = true
+        onGameOver(state.score, state.wave, state.dailyWaveEmojis)
+      }
 
       rafRef.current = requestAnimationFrame(loop)
     }
@@ -72,7 +96,11 @@ export default function GameCanvas() {
         case 'KeyZ':
           e.preventDefault()
           if (eng.getState().status === GameStatus.GAME_OVER) {
-            engineRef.current = new GameEngine()
+            if (dailyWave === undefined) {
+              // Classic: restart with fresh engine
+              engineRef.current = new GameEngine()
+            }
+            // Daily: don't restart — parent handles result card
           } else {
             eng.fire()
           }
@@ -84,7 +112,7 @@ export default function GameCanvas() {
           break
         case 'KeyH':
           e.preventDefault()
-          // Phase shift — reserved for na-002
+          eng.activatePhaseShift()
           break
         default:
           break
@@ -119,7 +147,7 @@ export default function GameCanvas() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [])
+  }, [dailyWave, onGameOver])
 
   return (
     <canvas
