@@ -30,6 +30,14 @@ export const ASTEROID_SCORE: Record<AsteroidSize, number> = {
   SMALL: 100,
 }
 
+// PhaseShift status const-object pattern (no enum)
+export const PhaseShiftStatus = {
+  READY: 'READY',
+  PHASING: 'PHASING',
+  COOLDOWN: 'COOLDOWN',
+} as const
+export type PhaseShiftStatus = typeof PhaseShiftStatus[keyof typeof PhaseShiftStatus]
+
 // GameEvent types
 export const GameEventType = {
   FIRE: 'FIRE',
@@ -40,6 +48,7 @@ export const GameEventType = {
   UFO_STOP: 'UFO_STOP',
   UFO_HIT: 'UFO_HIT',
   GAME_OVER: 'GAME_OVER',
+  PHASE_SHIFT_ACTIVATE: 'PHASE_SHIFT_ACTIVATE',
 } as const
 export type GameEventType = typeof GameEventType[keyof typeof GameEventType]
 
@@ -52,6 +61,7 @@ export type GameEvent =
   | { type: 'UFO_STOP' }
   | { type: 'UFO_HIT' }
   | { type: 'GAME_OVER' }
+  | { type: 'PHASE_SHIFT_ACTIVATE' }
 
 export interface Vec2 {
   x: number
@@ -69,6 +79,7 @@ export interface Ship {
   dyingTimer: number         // seconds remaining of death animation
   respawnTimer: number       // seconds remaining of respawn delay
   blinkOn: boolean
+  phasing: boolean           // true during PHASING state — collisions disabled
 }
 
 export interface Bullet {
@@ -115,4 +126,12 @@ export interface GameState {
   waveTimer: number         // seconds remaining in WAVE_CLEAR pause
   events: GameEvent[]
   asteroidIdCounter: number
+  // Phase shift
+  phaseShiftStatus: PhaseShiftStatus
+  phaseShiftTimer: number   // seconds remaining of PHASING or COOLDOWN
+  cooldownRemaining: number // seconds remaining of cooldown (for HUD arc)
+  // Daily mode
+  isDaily: boolean
+  dailyWaveEmojis: string[]
+  livesAtWaveStart: number  // lives count at start of current daily wave
 }
