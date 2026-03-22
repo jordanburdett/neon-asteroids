@@ -1,4 +1,4 @@
-import { GameStatus, PhaseShiftStatus, type GameState, type StarfieldStar } from './types'
+import { GameStatus, PhaseShiftStatus, type GameState, type StarfieldStar, type Particle } from './types'
 import { add, scale, rotate } from '../utils/math'
 import { GAME_WIDTH, GAME_HEIGHT, shipFacingVector } from './GameEngine'
 
@@ -45,6 +45,77 @@ function buildPhosphorPath(
     pathFn(ctx)
     ctx.stroke()
   })
+}
+
+function renderParticle(ctx: CanvasRenderingContext2D, p: Particle): void {
+  if (p.type === 'ASTEROID_RING') {
+    const progress = p.elapsed / p.duration
+    const radius = p.maxRadius * progress
+    const opacity = 0.8 * (1 - progress)
+    if (opacity <= 0 || radius <= 0) return
+
+    ctx.save()
+    // Glow pass
+    ctx.strokeStyle = `rgba(255,255,255,${opacity * 0.3})`
+    ctx.lineWidth = PHOSPHOR_GLOW_WIDTH
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+    ctx.stroke()
+    // Solid pass
+    ctx.strokeStyle = `rgba(255,255,255,${opacity})`
+    ctx.lineWidth = PHOSPHOR_WIDTH
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+  } else if (p.type === 'SHIP_DEATH_LINE') {
+    if (p.opacity <= 0) return
+
+    ctx.save()
+    const halfLen = p.length / 2
+    const cos = Math.cos(p.angle)
+    const sin = Math.sin(p.angle)
+    const x1 = p.x - cos * halfLen
+    const y1 = p.y - sin * halfLen
+    const x2 = p.x + cos * halfLen
+    const y2 = p.y + sin * halfLen
+
+    // Glow pass
+    ctx.strokeStyle = `rgba(255,255,255,${p.opacity * 0.28})`
+    ctx.lineWidth = PHOSPHOR_GLOW_WIDTH
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.stroke()
+    // Solid pass
+    ctx.strokeStyle = `rgba(255,255,255,${p.opacity})`
+    ctx.lineWidth = PHOSPHOR_WIDTH
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.stroke()
+    ctx.restore()
+  } else if (p.type === 'PHASE_RING') {
+    const progress = p.elapsed / p.duration
+    const radius = p.maxRadius * progress
+    const opacity = 0.7 * (1 - progress)
+    if (opacity <= 0 || radius <= 0) return
+
+    ctx.save()
+    // Glow pass
+    ctx.strokeStyle = `rgba(0,229,255,${opacity * 0.3})`
+    ctx.lineWidth = PHOSPHOR_GLOW_WIDTH
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+    ctx.stroke()
+    // Solid pass
+    ctx.strokeStyle = `rgba(0,229,255,${opacity})`
+    ctx.lineWidth = PHOSPHOR_WIDTH
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+  }
 }
 
 export function render(
@@ -174,17 +245,24 @@ export function render(
     })
   }
 
+  // Particles (behind HUD, in front of game objects)
+  for (const particle of state.particles) {
+    renderParticle(ctx, particle)
+  }
+
   // HUD
   renderHud(ctx, state)
 
   // Pause overlay
   if (state.status === GameStatus.PAUSED) {
-    ctx.fillStyle = 'rgba(0,0,0,0.5)'
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'
     ctx.fillRect(0, 0, W, H)
     ctx.fillStyle = '#FFFFFF'
-    ctx.font = '24px "Courier New", Courier, monospace'
+    ctx.font = '32px "Courier New", Courier, monospace'
     ctx.textAlign = 'center'
     ctx.fillText('PAUSED', W / 2, H / 2)
+    ctx.font = '16px "Courier New", Courier, monospace'
+    ctx.fillText('tap to resume', W / 2, H / 2 + 30)
     ctx.font = FONT
     ctx.textAlign = 'left'
   }
