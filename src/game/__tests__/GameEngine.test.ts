@@ -254,5 +254,80 @@ describe('GameEngine', () => {
 
     expect(engine.getState().status).toBe(GameStatus.WAVE_CLEAR)
   })
+
+  // Test 11: Thrust is blocked during respawn
+  it('thrust is blocked while ship is respawning', () => {
+    engine._injectState({
+      status: GameStatus.RESPAWNING,
+      ship: {
+        pos: { x: 400, y: 300 },
+        vel: { x: 0, y: 0 },
+        angle: 0,
+        thrusting: false,
+        dying: false,
+        respawning: true,
+        invulnerableTimer: 2.0,
+        dyingTimer: 0,
+        respawnTimer: 2.0,
+        blinkOn: true,
+        phasing: false,
+      },
+    })
+
+    engine.thrust(true)
+    engine.tick(100) // 100ms
+
+    const state = engine.getState()
+    // Velocity should remain zero — thrust blocked during respawn
+    expect(state.ship.vel.x).toBeCloseTo(0)
+    expect(state.ship.vel.y).toBeCloseTo(0)
+  })
+
+  // Test 12: Velocity is capped at MAX_SPEED (300 px/s)
+  it('velocity is clamped to MAX_SPEED after thrust', () => {
+    // Inject a ship already moving at 290 px/s to the right
+    engine._injectState({
+      ship: {
+        pos: { x: 400, y: 300 },
+        vel: { x: 290, y: 0 },
+        angle: 0, // facing right
+        thrusting: false,
+        dying: false,
+        respawning: false,
+        invulnerableTimer: 0,
+        dyingTimer: 0,
+        respawnTimer: 0,
+        blinkOn: true,
+        phasing: false,
+      },
+    })
+
+    // Thrust for a full second: +200 px/s would give 490, but should cap at 300
+    engine.thrust(true)
+    engine.tick(1000) // 1 second
+
+    const state = engine.getState()
+    const speed = Math.sqrt(state.ship.vel.x ** 2 + state.ship.vel.y ** 2)
+    expect(speed).toBeCloseTo(300, 0)
+  })
+
+  // Test 13: Fire cooldown prevents rapid-fire within 150ms
+  it('fire cooldown prevents shooting within 150ms', () => {
+    // Keep an asteroid so wave doesn't clear
+    const farAst = makeAsteroid(AsteroidSize.LARGE, { x: 700, y: 500 }, 77)
+    engine._injectState({ asteroids: [farAst] })
+
+    engine.fire()
+    expect(engine.getState().bullets.filter(b => !b.fromUfo).length).toBe(1)
+
+    // Immediately fire again — should be blocked by cooldown
+    engine.fire()
+    expect(engine.getState().bullets.filter(b => !b.fromUfo).length).toBe(1)
+
+    // Tick 160ms to clear cooldown, then fire again — should succeed
+    engine.tick(160)
+    engine.fire()
+    expect(engine.getState().bullets.filter(b => !b.fromUfo).length).toBe(2)
+  })
 })
 

@@ -52,6 +52,8 @@ const MAX_UFO_BULLETS = 2
 const UFO_REENTRY_MIN = 3            // seconds
 const UFO_REENTRY_MAX = 8            // seconds
 const UFO_SCORE = 1000
+const MAX_SPEED = 300                // px/s — hard velocity cap
+const FIRE_COOLDOWN = 0.15           // seconds (150ms minimum between shots)
 
 // Phase shift constants
 const PHASE_SHIFT_DURATION = 1.5    // seconds of phasing
@@ -293,6 +295,9 @@ export class GameEngine {
       state.ship.respawning
     ) return
 
+    // Enforce minimum cooldown between shots
+    if (this.fireCooldown > 0) return
+
     const playerBullets = state.bullets.filter(b => !b.fromUfo)
     if (playerBullets.length >= MAX_BULLETS) return
 
@@ -306,6 +311,7 @@ export class GameEngine {
       lifetime: BULLET_LIFETIME,
       fromUfo: false,
     })
+    this.fireCooldown = FIRE_COOLDOWN
     state.events.push({ type: 'FIRE' })
   }
 
@@ -524,11 +530,18 @@ export class GameEngine {
       state.ship.angle += SHIP_ROTATION_SPEED * dt
     }
 
-    // Thrust (no drag — velocity only increases)
-    if (this.thrustDown && !state.ship.dying && !state.ship.dying) {
+    // Thrust (no drag — velocity only increases, capped at MAX_SPEED)
+    if (this.thrustDown && !state.ship.dying && !state.ship.respawning) {
       const facing = shipFacingVector(state.ship.angle)
       state.ship.vel.x += facing.x * SHIP_THRUST * dt
       state.ship.vel.y += facing.y * SHIP_THRUST * dt
+
+      // Clamp velocity to MAX_SPEED
+      const speed = Math.sqrt(state.ship.vel.x * state.ship.vel.x + state.ship.vel.y * state.ship.vel.y)
+      if (speed > MAX_SPEED) {
+        state.ship.vel.x = state.ship.vel.x / speed * MAX_SPEED
+        state.ship.vel.y = state.ship.vel.y / speed * MAX_SPEED
+      }
     }
 
     // Move ship
